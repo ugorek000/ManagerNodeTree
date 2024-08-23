@@ -1,5 +1,5 @@
 bl_info = {'name':"ManagerNodeTree", 'author':"ugorek",
-           'version':(2,0,2), 'blender':(4,2,0), 'created':"2024.08.22",
+           'version':(2,0,2), 'blender':(4,2,0), 'created':"2024.08.23",
            'description':"Nodes for special high level managenment",
            'location':"NodeTreeEditor > N Panel > Mng",
            'warning':"!",
@@ -209,7 +209,7 @@ class PanelAddManagerNode(bpy.types.Panel):
                     rowItem = colList.row(align=True)
                     rowAdd = rowItem.row(align=True)
                     fit = f"bpy.ops.node.add_node('INVOKE_DEFAULT', type=\"{cls.bl_idname}\", use_transform=True)"
-                    rowAdd.operator(OpSimpleExec.bl_idname, text="", icon='TRIA_LEFT', depress=(ndAc.bl_idname==cls.bl_idname)and(ndAc.select)).exc = fit
+                    rowAdd.operator(OpSimpleExec.bl_idname, text="", icon='TRIA_LEFT', depress=(not not ndAc)and(ndAc.bl_idname==cls.bl_idname)and(ndAc.select)).exc = fit
                     rowAdd.scale_x = 1.75
                     rowLabel = rowItem#.row(align=True)
                     rowLabel.alignment = 'LEFT'
