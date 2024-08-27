@@ -8,9 +8,9 @@ txtDoc = f'''Utility from "{__name__}.py" module'''
 
 import bpy
 
-def prop_inac(self, *args, **kw_args):
+def prop_inac(self, *args, active=False, **kw_args):
     self.prop(*args, **kw_args)
-    self.active = False
+    self.active = active
 bpy.types.UILayout.prop_inac = prop_inac #Гениально. Но юзабельно в основном с внешним ly.ly(stuff).prop_inac().
 prop_inac.__doc__ = txtDoc
 
@@ -110,12 +110,14 @@ class TryAndErrInLy():
     def __enter__(self):
         return self.ly
     def __exit__(self, type, value, tb):
-        if type: #any((type, value, tb))
-            row = self.ly.row(align=True)
+        def LyTxtErr(where, txt):
+            row = where.row(align=True)
             row.label(icon='ERROR')
             col = row.column(align=True)
-            for li in traceback.format_exc().split("\n")[:-1]:
+            for li in txt.split("\n")[:-1]:
                 col.label(text=li)
+        if type: #any((type, value, tb))
+            LyTxtErr(self.ly, traceback.format_exc())
 
 def LyNiceColorProp(where, ess, prop, *, align=False, text="", scale=0.0, decor=3):
     rowCol = where.row(align=align)
