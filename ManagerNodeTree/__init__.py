@@ -1,10 +1,10 @@
 bl_info = {'name':"ManagerNodeTree", 'author':"ugorek",
-           'version':(2,2,0), 'blender':(4,2,0), 'created':"2024.08.28",
+           'version':(2,3,0), 'blender':(4,2,1), 'created':"2024.09.01",
            'description':"Nodes for special high level managenment",
            'location':"NodeTreeEditor > N Panel > Mng",
            'warning':"!",
            'category':"System",
-           'tracker_url':"https://github.com/ugorek000/ManagerNodeTree/issues", 'wiki_url':"https://github.com/ugorek000/ManagerNodeTree/issues"}
+           'tracker_url':"https://github.com/ugorek000/ManagerNodeTree/issues", 'wiki_url':"https://github.com/ugorek000/ManagerNodeTree/wiki"}
 #№№ as package
 
 from builtins import len as length
@@ -25,6 +25,7 @@ rud = uu_regutils.ModuleData()
 
 #import nodeitems_utils
 import functools
+import time
 LogConsole = print
 
 
@@ -33,11 +34,11 @@ class AddonPrefs(bpy.types.AddonPreferences):
 txt_regResetToDefault = ""
 
 if True: #Для защиты от всяких `bpy.types.Node.__repr__ = lambda a: f"||{a.name}||"`, (которые я использовал в своём RANTO для дебага например)
-    bpy.types.Node.__mng_repr__ = lambda nd: f"bpy.data.node_groups[\"{nd.id_data.name}\"].nodes[\"{nd.name}\"]" #Но всё равно пришлось делать вручную, ибо повторные активации аддона.
+    bpy.types.Node.__mng_repr__ = lambda nd: f"{nd.id_data.__repr__()}.nodes[\"{nd.name}\"]" #Но всё равно пришлось делать вручную, ибо повторные активации аддона.
     bpy.types.Node.__mng_repr__.__doc__ = f"Backup from {AddonPrefs.bl_idname} addon."
 else:
     bpy.types.Node.__mng_repr__ = bpy.types.Node.__repr__
-    #А так же в этом случае Node.__repr__ не имеет .__code__, так что не получится 'import types; types.FunctionType(bpy.types.Node.__repr__.__code__, ...)', чтобы изменить __doc__ у копии.
+    #В этом случае Node.__repr__ не имеет .__code__, так что не получится 'import types; types.FunctionType(bpy.types.Node.__repr__.__code__, ...)', чтобы изменить __doc__ у копии.
 
 class TryAndPass():
     def __enter__(self):
@@ -68,9 +69,6 @@ class ConvNclassTagNameId:
     del dict_сonvertTagName
 
 
-list_catAdds = []
-
-
 def MngUpdateDecorIcon(self, _context):
     if not self.decorIcon:
         self['decorIcon'] = self.bl_rna.properties['decorIcon'].default
@@ -84,10 +82,20 @@ def LyInvalidDecorIcon(where, self):
     row1.prop(self,'decorIcon', text="", placeholder="Icon")
     row0.alert = True
     row0.alignment = 'CENTER'
-    row0.label(text="..."*100) #Если нод адски широкий и пользователь где-то по середине, то чтобы не было ощущения, что макет просто исчез.
+    row0.label(text="..."*100) #Если нод адски широкий и пользователь где-то посередине, то чтобы не было ощущения, что макет просто исчез.
 
 
-dict_ndTxtError = {}
+dict_mngNdErrorEss = {}
+
+
+class PgNodeCollectionItemSpec(bpy.types.PropertyGroup):
+    def GetSelfNode(self, blidTarget, attColl): #Жаль, что реализация не предоставляет доступа к владельцу.
+        for nd in self.id_data.nodes:
+            if nd.bl_idname==blidTarget:
+                for ln in getattr(nd, attColl):
+                    if ln==self:
+                        return nd
+        assert False
 
 class ManagerTree(bpy.types.NodeTree):
     bl_idname = 'ManagerNodeTree'
@@ -100,12 +108,13 @@ class ManagerNodeFiller:
     isNotSetupNclass = True
     def InitNodePreChain(self,context):pass
     def InitNode(self,context):pass
+    def DrawLabelPreChain(self):return ""
     def DrawLabel(self):return ""
-    def LyDrawExtPreChain(self,context,colLy,prefs):pass
+    def LyDrawExtNodePreChain(self,context,colLy,prefs):pass
     def LyDrawExtNode(self,context,colLy,prefs):pass
-    def LyDrawPreChain(self,context,colLy,prefs):pass
+    def LyDrawNodePreChain(self,context,colLy,prefs):pass
     def LyDrawNode(self,context,colLy,prefs):pass
-    def LyDrawPostChain(self,context,colLy,prefs):pass
+    def LyDrawNodePostChain(self,context,colLy,prefs):pass
 class ManagerNodeRoot(bpy.types.Node, ManagerNodeFiller):
     @classmethod
     def poll(cls, tree):
@@ -117,43 +126,123 @@ class ManagerNodeRoot(bpy.types.Node, ManagerNodeFiller):
         if self.isNotSetupNclass:
             opa.BNode(self).typeinfo.contents.nclass = self.nclass
             self.__class__.isNotSetupNclass = False
-        return self.DrawLabel()
+        return self.DrawLabelPreChain() or self.DrawLabel() #"or" без нужды, DrawLabelPreChain слишком редкий.
     def draw_buttons_ext(self, context, layout):
         colLy = layout.column()
         prefs = Prefs()
-        self.LyDrawExtPreChain(context, colLy, prefs)
+        self.LyDrawExtNodePreChain(context, colLy, prefs)
         self.LyDrawExtNode(context, colLy, prefs)
     def draw_buttons(self, context, layout):
         if "debug": self.draw_label()
         colLy = layout.column()
         prefs = Prefs()
-        self.LyDrawPreChain(context, colLy, prefs)
+        self.LyDrawNodePreChain(context, colLy, prefs)
         self.LyDrawNode(context, colLy, prefs)
-        self.LyDrawPostChain(context, colLy, prefs)
+        self.LyDrawNodePostChain(context, colLy, prefs)
+
+#Флаг ^15 -- nd.use_custom_color
+#Флаг ^20 -- lastAlertState; см. в BNdToggleSetCol(col=None).
+#Флаг ^21 -- isNowBlinkingAlert; А так же активация при открытии файла.
+#Флаг ^22 -- stateBlinkingAlert; Экономить перерисовки.
+flagsUcsLas = 32768 | 1048576 #1<<15 | 1<<20
+def BNdToggleSetCol(bNd, col=None):
+    if col is None:
+        if bNd.flag&1048576: #1<<20 #Нужно, чтобы при неактивном алерте можно было изменить цвет самого нода при постоянном вызове ProcAlertState. Бесполезно, ибо при активации алерта перезапишется, но всё ради эстетики.
+            bNd.flag &= ~flagsUcsLas
+    else:
+        bNd.flag |= flagsUcsLas
+        bNd.color = col #Выкуси, предупреждение "нельзя писать в рисовании", чтоб тебя.
+
+dict_mngNdBlinkingAlertState = {}
+dict_mngNdTimeStartBlinkingAlert = {}
+
+def MngProcBlinkingAlert(tns, nd, bNd, *, anyway=False):
+    def Rainbow(x, ofs, mul2):
+        return max(min(2.0-abs((x+ofs)%6.0-2.0),1.0),0.0)*(1.0 if mul2==2.0 else max(mul2,1.0)%1.0)
+    num = int(2_000_000_000-1_750_000_000*(1.0 if nd.alertColor[3]==2.0 else nd.alertColor[3]%1.0))
+    col = nd.alertColor[:3]
+    if max(col)>1.0:
+        fac = (tns/num%3.0)*2.0
+        BNdToggleSetCol(bNd, (Rainbow(fac, +2, col[0]), Rainbow(fac, 0, col[1]), Rainbow(fac, -2, col[2])))
+        if not anyway:
+            nd.label = nd.label
+    else:
+        if (tns%num)<(num>>1): #Сравнение с первой половиной, чтобы показывать(менять) цвет сразу при активации.
+            if (not bNd.flag&4194304)or(anyway): #1<<22
+                bNd.flag |= 4194304 #1<<22
+                BNdToggleSetCol(bNd, col)
+                if not anyway: #Топокостыль, anyway==True использует только рисование.
+                    nd.label = nd.label
+        else:
+            if (bNd.flag&4194304)or(anyway): #1<<22
+                bNd.flag &= ~4194304 #1<<22
+                BNdToggleSetCol(bNd)
+                if not anyway:
+                    nd.label = nd.label
+def MngTimerBlinkingAlert():
+    tns = time.perf_counter_ns()
+    for dk, (reprGetTree, reprTreeGetNd) in dict_mngNdBlinkingAlertState.items():
+        if (not eval(reprGetTree))or(not(ndRepr:=eval(reprTreeGetNd))):
+            #Для переименований нода, CtrlZ'ов, и прочих неожиданностей.
+            del dict_mngNdBlinkingAlertState[dk]
+            if False: #Тогда другим не достанется, но вызов каждые 0.05s, так что переживут.
+                MngTimerBlinkingAlert()
+            break
+        bNd = opa.BNode(ndRepr)
+        if bNd.flag&2097152: #1<<21 #Явная проверка, чтобы не мигать вечно; но не важна, ибо см. else в DrawLabelPreChain, который выключает мигание.
+            MngProcBlinkingAlert(tns-dict_mngNdTimeStartBlinkingAlert[dk], ndRepr, bNd)
+    return 0.05 if dict_mngNdBlinkingAlertState else None
 
 def MnaUpdateAlertColor(self, _context):
-    self['alertColor'] = self.alertColor[:3]+(float(self.alertColor[3]>0.5),)
+    self['alertColor'] = self.alertColor[:3]+(0.0 if self.alertColor[3]<0.5 else max(1.0, min(self.alertColor[3], 2.0)),)
 class ManagerNodeAlertness(ManagerNodeRoot):
-    alertColor: bpy.props.FloatVectorProperty(name="Alert Color", size=4, min=0.0, max=1.0, subtype='COLOR_GAMMA', update=MnaUpdateAlertColor)
-    blinkingAlert: bpy.props.FloatProperty(name="Blinking Alert", default=0.0, min=0.0, max=1.0, subtype='FACTOR')
-    #isActiveAlert: property(lambda s: any(s.alertColor[3:]))
-    def LyDrawExtPreChain(self, context, colLy, prefs):
-        uu_ly.LyNiceColorProp(colLy, self,'alertColor')
-    #Заметка: draw_label() не вызывается, если label!="" и нод свёрнут, но вызывается, если развёрнут.
-    def ProcAlertState(self, ess):
+    alertColor: bpy.props.FloatVectorProperty(name="Alert Color", size=4, min=0.0, max=2.0, subtype='COLOR_GAMMA', update=MnaUpdateAlertColor)
+    def DelSelfFromDictBlinking(self):
+        key = self.__mng_repr__()
+        if key in dict_mngNdBlinkingAlertState:
+            del dict_mngNdBlinkingAlertState[key]
+    def free(self):
+        #Так-то идеально, да, но: удалить нод с мигающим алертом; отменить; повторить -- и free() не вызывается. От чего эта процедура в целом бесполезна.
+        self.DelSelfFromDictBlinking()
+    def DrawLabelPreChain(self):
+        #Плакала производительность... Ох уж эти CtrlZ'ы и "нельзя писать в рисовании". Но оно того стоит.
         bNd = opa.BNode(self)
-        #Помимо use_custom_color используется незанятый 1<<20 для личных нужд аддона.
-        #Ибо всё ещё нельзя писать в рисовании в своё кастомное поле класса 'lastIsAlert = ...'.
-        #Заметка: бит 1<<20 сохраняется в .blend файле.
-        num = 32768 | 1048576
-        if (not self.mute)and(not not ess)and(self.alertColor[3]):
-            bNd.flag |= num
-            bNd.color = self.alertColor[:3] #Выкуси, предупреждение "нельзя писать в рисовании".
-        elif bNd.flag & 1048576:
-            bNd.flag &= ~num
+        if bNd.flag&2097152: #1<<21
+            key = self.__mng_repr__() #Простой ключ-repr-без-изменений, чтобы сэкономить ещё чутка производительности от строковых замен ниже.
+            if key not in dict_mngNdBlinkingAlertState:
+                list_spl = key.split("]")
+                dict_mngNdBlinkingAlertState[key] = (list_spl[0].replace("[", ".get(")+", None)", list_spl[0]+"]"+list_spl[1].replace("[", ".get(")+", None)")
+                dict_mngNdTimeStartBlinkingAlert[key] = time.perf_counter_ns()
+                if not bpy.app.timers.is_registered(MngTimerBlinkingAlert):
+                    bpy.app.timers.register(MngTimerBlinkingAlert)
+        else:
+            self.DelSelfFromDictBlinking()
+    #Заметка: draw_label() не вызывается, если label!="" и нод свёрнут, но вызывается, если развёрнут.
+    def LyDrawExtNodePreChain(self, context, colLy, prefs):
+        uu_ly.LyNiceColorProp(colLy, self,'alertColor')
+    def ProcAlertState(self, ess, col=None):
+        if col is None:
+            col = self.alertColor
+        bNd = opa.BNode(self)
+        if (not self.mute)and(not not ess)and(col[3]):
+            if col[3]>1.0:
+                if not(bNd.flag&2097152): #1<<21
+                    bNd.flag |= 2097152 #1<<21
+                    MngProcBlinkingAlert(0, self, bNd, anyway=True) #Отправляется 0, а не time.perf_counter_ns(), потому что мигания теперь "локальны", см. dict_mngNdTimeStartBlinkingAlert.
+                    self.DrawLabelPreChain() #Для dict_mngNdTimeStartBlinkingAlert и 'if not .. timers .. MngTimerBlinkingAlert'.
+            else:
+                if bNd.flag&2097152: #1<<21
+                    bNd.flag &= ~2097152 #1<<21
+                    self.DelSelfFromDictBlinking()
+                BNdToggleSetCol(bNd, col[:3])
+        else:
+            if bNd.flag&2097152: #1<<21
+                bNd.flag &= ~2097152 #1<<21
+                self.DelSelfFromDictBlinking()
+            BNdToggleSetCol(bNd)
 
 class PresetsAndEx:
-    def AddNodeByBlid(tree, meta_type='Preset'):
+    def AddNodeByBlid(tree, meta_cat="2Utility"):
         list_addedNodes = []
         ndNqle = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
         list_addedNodes.append(ndNqle)
@@ -169,7 +258,7 @@ class PresetsAndEx:
         ndNqle.lines.add().txtExec = "bpy.ops.node.add_node('INVOKE_DEFAULT', type=C.node.lines[0].txtExec.replace(\"#\", \"\"), use_transform=True)"
         ndNqle.count = ndNqle.count
         return list_addedNodes
-    def DoubleBigExec(tree, meta_type='Preset'):
+    def DoubleBigExec(tree, meta_cat="0Preset"):
         list_addedNodes = []
         ndNqle0 = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
         list_addedNodes.append(ndNqle0)
@@ -177,7 +266,7 @@ class PresetsAndEx:
         ndNqle0.name = "DoubleBigExec0"
         ndNqle0.label = "Speed up aiming for cursor work by large button size."
         ndNqle0.isShowOnlyLayout = True
-        ndNqle0.visibleButtons = 0
+        ndNqle0.visibleButtons = 1
         ndNqle1 = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
         list_addedNodes.append(ndNqle1)
         ndNqle1.location.y = -140
@@ -189,10 +278,12 @@ class PresetsAndEx:
         ndNqle1.visibleButtons = 14
         ##
         ndNqle0.lines.clear()
-        ndNqle0.lines.add().txtExec = f"ndTar = bpy.context.space_data.edit_tree.nodes.get(\"{ndNqle1.name}\")"
+        ndNqle0.lines.add().txtExec = f"ndTar = self.id_data.nodes.get(\"{ndNqle1.name}\")"
         ndNqle0.lines.add().txtExec = "row = ly.row(align=True)"
-        ndNqle0.lines.add().txtExec = f"row.operator('{OpSimpleExec.bl_idname}', text=\"Big button for anti-missclick\").exc = " "f\"{repr(ndTar)}.ExecuteAll()\""
+        ndNqle0.lines.add().txtExec = f"row.operator('{OpSimpleExec.bl_idname}', text=self.lines[-1].txtExec).exc = " "f\"{repr(ndTar)}.ExecuteAll()\""
         ndNqle0.lines.add().txtExec = "row.scale_y = 5.0"
+        ndNqle0.lines.add().txtExec = "Big button for anti-missclick"
+        ndNqle0.lines[-1].isActive = False
         ndNqle0.count = ndNqle0.count
         ##
         ndNqle1.lines.clear()
@@ -203,9 +294,9 @@ class PresetsAndEx:
         ndNqle1.lines.add().txtExec = f"bpy.context.window_manager.popup_menu(PopupMessage, title=\"{ndNqle0.name}\", icon='NONE')"
         ndNqle1.lines.add().txtExec = "import random; C.node.id_data.nodes[C.node.lines[0].txtExec.split(\"(\\\"\")[-1][:-2]].label = \"Big button's code below: \"+str(random.random())"
         ndNqle1.lines.add().isTb = True
-        ndNqle1.count = ndNqle1.count
+        ndNqle1.count = 7
         return list_addedNodes
-    def ThemeRoundness(tree, meta_type='Example'):
+    def ThemeRoundness(tree, meta_cat="1Example"):
         list_addedNodes = []
         ndNsf = tree.nodes.new(NodeSolemnFactor.bl_idname)
         list_addedNodes.append(ndNsf)
@@ -238,7 +329,7 @@ class PresetsAndEx:
         ndNqle2.isShowOnlyLayout = True
         list_addedNodes[0], list_addedNodes[2] = list_addedNodes[2], list_addedNodes[0]
         ##
-        ndNsf.txtExecOnUpdate = f"C.space_data.edit_tree.nodes[\"{ndNqle0.name}\"].ExecuteAll()"
+        ndNsf.txtExecOnUpdate = f"self.id_data.nodes[\"{ndNqle0.name}\"].ExecuteAll()"
         ##
         ndNqle0.lines.clear()
         ndNqle0.lines.add().txtExec = "theme = bpy.context.preferences.themes[0].user_interface"
@@ -258,7 +349,10 @@ class PresetsAndEx:
         ndNqle1.lines.add().txtExec = ndNqle0.lines[4].txtExec
         ndNqle1.lines.add().txtExec = "    sum += getattr(getattr(bpy.context.preferences.themes[0].user_interface, \"wcol_\"+li),'roundness')"
         ndNqle1.lines.add().txtExec = "  ndTar[ndTar.txtPropSelfSolemn] = sum/len(txtAtts.split())"
+        ndNqle1.lines.add().txtExec = "  ndTar.select = False"
         ndNqle1.lines.add().txtExec = "C.node.id_data.nodes.remove(C.node)"
+        ndNqle1.lines.add().txtExec = f"self.id_data.nodes[\"{ndNqle0.name}\"].select = False"
+        ndNqle1.lines.add().txtExec = f"self.id_data.nodes[\"{ndNqle2.name}\"].select = False"
         ndNqle1.count = ndNqle1.count
         ##
         ndNqle2.lines.clear()
@@ -272,17 +366,17 @@ class PresetsAndEx:
         ndNqle2.lines.add().txtExec = "colList.prop(bpy.context.preferences.themes[0].user_interface,'panel_roundness')"
         ndNqle2.count = ndNqle2.count
         return list_addedNodes
-    def AssertFrameStep(tree, meta_type='Example'):
+    def AssertFrameStep(tree, meta_cat="1Example"):
         list_addedNodes = []
         ndNa = tree.nodes.new(NodeAssertor.bl_idname)
         list_addedNodes.append(ndNa)
         ndNa.width = 560
         ndNa.name = "AssertFrameStep"
-        ndNa.txtEval = "(C.scene.frame_step == 1) and (C.scene.render.resolution_y % 2 == 0)"
+        ndNa.txtAssert = "result = (C.scene.frame_step == 1) and (C.scene.render.resolution_y % 2 == 0)"
         ndNa.decorText = "Frame Step is 1  and  Even Resolution[1]"
         ndNa.alertColor = (0.85, 0.425, 0.0, 1.0)
         return list_addedNodes
-    def StatOfTbLines(tree, meta_type='Example'):
+    def StatOfTbLines(tree, meta_cat="2Utility"):
         list_addedNodes = []
         ndNqle = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
         list_addedNodes.append(ndNqle)
@@ -315,24 +409,96 @@ class PresetsAndEx:
         ndNqle.lines[-1].isActive = False
         ndNqle.count = ndNqle.count
         return list_addedNodes
-    def CheckLyRedraw(tree, meta_type='Example'):
+    def RedrawCheck(tree, meta_cat="2Utility"):
         list_addedNodes = []
         ndNqle = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
         list_addedNodes.append(ndNqle)
-        ndNqle.name = "CheckLyRedraw"
+        ndNqle.name = "RedrawCheck"
         ndNqle.label = "Redraw Check"
         ndNqle.width = 200
         ndNqle.visibleButtons = 0
         ndNqle.lines.clear()
         ndNqle.lines.add().txtExec = "import random; ly.label(text=str(random.random()), icon=\"SEQUENCE_COLOR_0\"+str(random.randint(1, 9)))"
         ndNqle.isShowOnlyLayout = True
-        #ndNqle.count = ndNqle.count
+        return list_addedNodes
+    def NodeFlagViewer(tree, meta_cat="2Utility"):
+        list_addedNodes = []
+        ndNqle = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
+        list_addedNodes.append(ndNqle)
+        ndNqle.width = 340
+        ndNqle.name = "NodeFlagViewer"
+        ndNqle.label = "Node flag viewer"
+        ndNqle.isShowOnlyLayout = True
+        ndNqle.lines.clear()
+        ndNqle.lines.add().txtExec = "if (ndAc:=self.id_data.nodes.active)or(ndAc:=self):"
+        ndNqle.lines.add().txtExec = "  def Recr(txt, depth=3):"
+        ndNqle.lines.add().txtExec = "    return txt if not depth else Recr(txt[:len(txt)//2], depth-1)+\" \"*depth+Recr(txt[len(txt)//2:], depth-1)"
+        ndNqle.lines.add().txtExec = "  def LyLabel(where, *, header, txt):"
+        ndNqle.lines.add().txtExec = "    rowMain = where.row(align=True); rowMain.alignment = 'CENTER'; row = rowMain.row(); row.alignment = 'CENTER'"
+        ndNqle.lines.add().txtExec = "    row.active = False; row.label(text=header); rowMain.label(text=txt)"
+        ndNqle.lines.add().txtExec = "  ly.prop(ndAc,'name', text=\"\", icon='NODE')"
+        ndNqle.lines.add().txtExec = "  LyLabel(ly, header=\"bin\", txt=Recr(bin(opa.BNode(ndAc).flag).replace(\"0b\", \"\").rjust(32, \"0\")))"
+        ndNqle.lines.add().txtExec = "  LyLabel(ly, header=\"dec\", txt=str(opa.BNode(ndAc).flag))"
+        ndNqle.count = ndNqle.count
+        return list_addedNodes
+    def UserAgreement(tree, meta_cat="1Example"):
+        list_addedNodes = []
+        ndSb = tree.nodes.new(NodeSolemnBool.bl_idname)
+        list_addedNodes.append(ndSb)
+        ndSb.name = "UserAgreement"
+        ndSb.label = "Agreement"
+        ndSb.alertColor = (1.0, 0.0, 0.0, 1.75)
+        ndSb.txtCeremonial = "Blender the best!"
+        ndSb.txtExecOnUpdate = "if self.value==False: print№(\"Oh nooo...\")".replace("№", "")
+        ndSb.alerting = True
+        ndSb.isHlFromTheme = False
+        return list_addedNodes
+    def NqleAlerting(tree, meta_cat="1Example"):
+        list_addedNodes = []
+        ndNqle = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
+        list_addedNodes.append(ndNqle)
+        ndNqle.name = "NqleAlerting"
+        ndNqle.label = "Nqle Alerting Example"
+        ndNqle.width = 650
+        ndNqle.alertColor = (2.0, 2.0, 2.0, 1.5)
+        ndNqle.lines.clear()
+        ndNqle.lines.add().txtExec = "curLoc = C.space_data.cursor_location"
+        ndNqle.lines.add().txtExec = "if C.region.view2d.view_to_region(curLoc.x, curLoc.y)!=(12000, 12000):"
+        ndNqle.lines.add().txtExec = "  isX = (curLoc.x>self.location.x)and(curLoc.x<self.location.x+self.width)"
+        ndNqle.lines.add().txtExec = "  scaleUi = C.preferences.system.dpi/72"
+        ndNqle.lines.add().txtExec = "  isY = (curLoc.y<self.location.y)and(curLoc.y>self.location.y-self.dimensions.y/scaleUi)" #Огм, у меня без "s" свойство почему-то переодически существует.
+        ndNqle.lines.add().txtExec = "  alert = (isX)and(isY)"
+        ndNqle.lines.add().txtExec = "#ly.prop(C.preferences.view,'ui_scale')"
+        ndNqle.count = ndNqle.count
+        return list_addedNodes
+    def RedrawAlways(tree, meta_cat="2Utility"):
+        list_addedNodes = []
+        ndNqle = tree.nodes.new(NodeQuickLayoutExec.bl_idname)
+        list_addedNodes.append(ndNqle)
+        ndNqle.name = "RedrawAlways"
+        ndNqle.label = "Always Redraw"
+        ndNqle.width = 160
+        ndNqle.isShowOnlyLayout = True
+        ndNqle.lines.clear()
+        ndNqle.lines.add().txtExec = "import functools"
+        ndNqle.lines.add().txtExec = "def TimerRedrawAlways(reprNd):"
+        ndNqle.lines.add().txtExec = "  nd = eval(reprNd); nd.label = nd.label"
+        ndNqle.lines.add().txtExec = "bpy.app.timers.register(functools.partial(TimerRedrawAlways, self.__mng_repr__()))"
+        ndNqle.lines.add().txtExec = "ly.label(text=\"Now it always redraws\")"
+        ndNqle.count = ndNqle.count
+        return list_addedNodes
+    def Dummy(tree, meta_ca1t="9Dummy"):
+        list_addedNodes = []
+        ndAaa = tree.nodes.new(NodeAaa.bl_idname)
+        list_addedNodes.append(ndAaa)
+        ndAaa.name = "Dummy"
         return list_addedNodes
     dict_catPae = {}
     for dk, dv in dict(locals()).items():
-        if callable(dv):
-            dict_catPae.setdefault(dv.__defaults__[0], []).append(dv.__code__.co_name) #meta_type используется здесь.
-    list_catPae = [(li[0], li[1]) for li in sorted(dict_catPae.items(), key=lambda a: {"P":0, "E":1}[a[0][0]])] #list(dict_catPae.items())
+        if (callable(dv))and('meta_cat' in dv.__code__.co_varnames):
+            dict_catPae.setdefault(dv.__defaults__[0], []).append(dv.__code__.co_name)
+    list_catPae = [(li[0][1:], li[1]) for li in sorted(dict_catPae.items(), key=lambda a: a[0][0])] #list(dict_catPae.items())
+    del dict_catPae
 
 class OpPamnPresets(bpy.types.Operator):
     bl_idname = 'mng.pamn_presets'
@@ -360,6 +526,7 @@ class PanelAddManagerNode(bpy.types.Panel):
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Mng"
+    bl_order = 0
     @classmethod
     def poll(cls, context):
         return not not context.space_data.edit_tree
@@ -438,7 +605,7 @@ txt_regResetToDefault += " pamnFilter pamnUnfurils"
 
 class PanelAddManagerNode_SubPresetsAndEx(bpy.types.Panel):
     bl_idname = 'MNG_PT_SubPresetsAndEx'
-    bl_label = "Presets and Ex."
+    bl_label = "Auxiliaries"
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_parent_id = PanelAddManagerNode.bl_idname
@@ -471,6 +638,7 @@ class PanelManagerActiveNode(bpy.types.Panel):
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Mng"
+    bl_order = 1
     @classmethod
     def poll(cls, context):
         tree = context.space_data.edit_tree
@@ -564,13 +732,12 @@ def NnpUpdateCount(self, _context):
         self['count'] = 1
         self.lines.add().name = "0"
 def NnpUpdateLineBody(self, context):
-    if hasattr(context,'node'): #Удаление содержимого через Backspace (без явного редактирования).
-        if (not self.body)or(int(self.name)==length(context.node.lines)-1):
-            NnpUpdateCount(context.node, context)
-        if False:
-            context.node.txtBackupLines = "\n".join(ci.body for ci in context.node.lines)
-
-class NnpLine(bpy.types.PropertyGroup):
+    ndSelf = self.GetSelfNode(NodeNotepad.bl_idname, 'lines')
+    if (not self.body)or(int(self.name)==length(ndSelf.lines)-1):
+        NnpUpdateCount(ndSelf, context)
+    if False:
+        ndSelf.txtBackupLines = "\n".join(ci.body for ci in ndSelf.lines)
+class NnpLine(PgNodeCollectionItemSpec):
     body: bpy.props.StringProperty(name="Body", default="", update=NnpUpdateLineBody)
 class NodeNotepad(ManagerNodeNote):
     bl_idname = 'MngNodeNotepad'
@@ -578,13 +745,13 @@ class NodeNotepad(ManagerNodeNote):
     bl_width_min = 140
     mngCategory = "0Text", 2
     lines: bpy.props.CollectionProperty(type=NnpLine)
-    #txtBackupLines: bpy.props.StringProperty(default="") #Не используется. Идея была, что если нод сломается, то восстановить через просое свойство будет проще, чем через PropertyGroup.
+    #txtBackupLines: bpy.props.StringProperty(default="") #Не используется. Идея была, что если нод сломается, то восстановить через простое свойство будет проще, чем через PropertyGroup.
     isAutoCount: bpy.props.BoolProperty(name="Auto notepad", default=True, update=NnpUpdateCount)
     count: bpy.props.IntProperty(name="Count of lines", default=1, min=0, max=32, soft_min=1, soft_max=12, update=NnpUpdateCount)
     isLyReadOnly: bpy.props.BoolProperty(name="Read only", default=False, update=NnpUpdateCount)
     isProtectErasion: bpy.props.BoolProperty(name="Protect erasion", default=True)
     decorLineAlignment: bpy.props.EnumProperty(name="Lines alignment", default='DOCK', items=( ('FLAT',"Flat",""), ('DOCK',"Docking",""), ('GAP',"Gap","") ))
-    includeNumbering: bpy.props.IntProperty(name="Include numbering", default=2, min=0, max=2)
+    decorIncludeNumbering: bpy.props.IntProperty(name="Include numbering", default=2, min=0, max=2)
     decorVars: bpy.props.IntProperty(name="Decor", default=4, min=0, max=15)
     def InitNode(self, _context):
         self.count = 1 #Чтобы затриггерить NnpUpdateCount().
@@ -599,25 +766,25 @@ class NodeNotepad(ManagerNodeNote):
         row = colList.column(align=True)
         uu_ly.LyNiceColorProp(row, self,'decorLineAlignment')
         row.active = (self.count>1)and(not self.isLyReadOnly)
-        colList.prop(self,'includeNumbering')
+        colList.prop(self,'decorIncludeNumbering')
         colList.prop(self,'decorVars')
     def LyDrawNode(self, _context, colLy, _prefs):
         colLines = colLy.column(align=self.decorLineAlignment!='GAP')
         len = length(str(self.count)) #length(self.lines)
-        numbering = self.includeNumbering
-        txt = ":" if numbering==2 else ""
+        decorNum = self.decorIncludeNumbering
+        txt = ":" if decorNum==2 else ""
         decorVars = self.decorVars
         for cyc, ci in enumerate(self.lines):
             rowLine = ( colLines.row() if self.decorLineAlignment=='DOCK' else colLines ).row(align=True)
-            if numbering:
+            if decorNum:
                 rowNum = rowLine.row(align=True)
                 rowNum.alignment = 'LEFT'
                 rowNum.active = decorVars%2
-                rowNum.alert = decorVars//2%2
+                rowNum.alert = (decorVars>>1)%2
                 rowNum.label(text=str(cyc+1).zfill(len)+txt)
             rowBody = rowLine.row(align=True)
-            rowBody.active = decorVars//4%2
-            rowBody.alert = decorVars//8%2
+            rowBody.active = (decorVars>>2)%2
+            rowBody.alert = (decorVars>>3)
             if self.isLyReadOnly:
                 rowBody.label(text=ci.body)
             else:
@@ -852,34 +1019,26 @@ class NqleOpDelLine(bpy.types.Operator):
     def execute(self, context):
         ndRepr = eval(self.repr)
         ndRepr.lines.remove(self.num)
-        dict_nqleNdCompileCache[ndRepr] = None
+        dict_nqleNdCompiledCache[ndRepr] = None
         ndRepr.count = length(ndRepr.lines)
         return {'FINISHED'}
 
 def NqleUpdateForReCompile(self, _context):
-    dict_nqleNdCompileCache[self.GetSelfNode()] = None
-class NqleLineItem(bpy.types.PropertyGroup):
+    dict_nqleNdCompiledCache[self.GetSelfNode(NodeQuickLayoutExec.bl_idname, 'lines')] = None
+class NqleLineItem(PgNodeCollectionItemSpec):
     fit = "Exec: {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self}\nLayout |= {'ly': colLy}"
     isActive:  bpy.props.BoolProperty(name="Active",     default=True,        update=NqleUpdateForReCompile)
     isTb:      bpy.props.BoolProperty(name="Toggle",     default=False,       update=NqleUpdateForReCompile)
     tbPoi:  bpy.props.PointerProperty(name="Text Block", type=bpy.types.Text, update=NqleUpdateForReCompile, description=fit)
     txtExec: bpy.props.StringProperty(name="Text Exec",  default="",          update=NqleUpdateForReCompile, description=fit)
     del fit
-    def GetSelfNode(self): #Жаль, что реализация не предоставляет доступа к владельцу; https://blender.stackexchange.com/a/323542/156014
-        for nd in self.id_data.nodes:
-            if nd.bl_idname==NodeQuickLayoutExec.bl_idname:
-                poi = self.as_pointer()
-                for ln in nd.lines:
-                    if ln.as_pointer()==poi:
-                        return nd
-        assert False
 
-dict_nqleNdCompileCache = {}
+dict_nqleNdCompiledCache = {}
 
 def NqleUpdateCount(self, _context):
     len = length(self.lines)
-    #if len!=self.count: #Заметка: поскольку изменение количетсва добавляет и удаляет только пустые, в перекомплияции нет нужды.
-    #    dict_nqleNdCompileCache[self] = None
+    #if len!=self.count: #Заметка: поскольку изменение количества добавляет и удаляет только пустые, в перекомпиляции нет нужды.
+    #    dict_nqleNdCompiledCache[self] = None
     for cyc in range(len, self.count):
         self.lines.add().name = str(cyc)
     for cyc in reversed(range(self.count, len)):
@@ -888,8 +1047,8 @@ def NqleUpdateCount(self, _context):
     self['count'] = length(self.lines) #nqleIsCountUpdating
 def NqleUpdateMethod(self, _context):
     self.soldIsAsExc = self.method=='EXEC'
-class NodeQuickLayoutExec(ManagerNodeRoot):
-    nclass = 8
+class NodeQuickLayoutExec(ManagerNodeAlertness):
+    nclass = 10 #8
     bl_idname = 'MngNodeQuickLayoutExec'
     bl_label = "Quick Layout Exec"
     bl_icon = 'LONGDISPLAY'
@@ -903,6 +1062,7 @@ class NodeQuickLayoutExec(ManagerNodeRoot):
     count: bpy.props.IntProperty(name="Count of lines", default=1, min=1, max=64, soft_min=1, soft_max=16, update=NqleUpdateCount)
     isCaching: bpy.props.BoolProperty(name="Caching", default=True)
     isShowOnlyLayout: bpy.props.BoolProperty(name="Layout display only", default=False)
+    txtVaribleForAlert: bpy.props.StringProperty(name="Varible for alert", default="alert")
     decorExec: bpy.props.StringProperty(name="Decor Exec button", default="Exec")
     visibleButtons: bpy.props.IntProperty(name="Visibility of buttons", default=15, min=0, max=15)
     def DrawLabel(self):
@@ -920,6 +1080,7 @@ class NodeQuickLayoutExec(ManagerNodeRoot):
         else:
             colList.prop(self,'isCaching')
         colList.prop(self,'isShowOnlyLayout')
+        uu_ly.LyNiceColorProp(colList, self,'txtVaribleForAlert')
         row = colList.row(align=True)
         row.prop(self,'visibleButtons')
         row.active = not self.isShowOnlyLayout
@@ -939,11 +1100,11 @@ class NodeQuickLayoutExec(ManagerNodeRoot):
                     rowEnb.prop(ci,'isActive', text="")
                 rowEnb.active = False
                 rowTb = rowLine.row(align=True)
-                if visibleButs//2%2:
+                if (visibleButs>>1)%2:
                     fit = (ci.isTb)and(not ci.txtExec)or not(ci.isTb or not ci.tbPoi) #Показать пользователю подсветкой, что на противоположном варианте что-то есть, и "не забудь про это".
                     rowTb.prop(ci,'isTb', text="", icon='WORDWRAP_OFF', emboss=True, invert_checkbox=fit) #RIGHTARROW  GREASEPENCIL  WORDWRAP_OFF  ALIGN_JUSTIFY
                 rowTb.active = False
-                if (self.soldIsAsExc)and(visibleButs//4%2):
+                if (self.soldIsAsExc)and((visibleButs>>2)%2):
                     row = rowLine.row(align=True)
                     row.operator(OpSimpleExec.bl_idname, text="", icon='TRIA_RIGHT').exc = f"{self.__mng_repr__()}.ExecuteOne({cyc})"
                     row.active = not(ci.isTb and not ci.tbPoi)
@@ -951,7 +1112,7 @@ class NodeQuickLayoutExec(ManagerNodeRoot):
                     rowLine.prop(ci,'tbPoi', text="", icon='TEXT')
                 else:
                     rowLine.prop(ci,'txtExec', text="", icon='SCRIPT')
-                if visibleButs//8%2:
+                if (visibleButs>>3):
                     rowLine.operator_props(NqleOpDelLine.bl_idname, text="", icon='TRASH', repr=self.__mng_repr__(), num=cyc)
                 rowLine.active = ci.isActive
         if self.soldIsAsExc:
@@ -960,16 +1121,20 @@ class NodeQuickLayoutExec(ManagerNodeRoot):
         elif prefs.isAllowNqleWorking:
             with uu_ly.TryAndErrInLy(colLy): #Заметка: лучше оставить, ибо часто будут использоваться функции.
                 #Заметка: компиляция с кешированием должны быть по нужде, а не сразу при изменении содержания; чтобы при редактировании через скрипты не вызывать бесполезные вычисления.
-                if not( (self.isCaching)and(dict_nqleNdCompileCache.get(self, None)) ):
-                    dict_nqleNdCompileCache[self] = compile(self.GetCollectedFullText(), "", 'exec')
-                self.DoExecute(dict_nqleNdCompileCache[self], dict_vars={'ly': colLy})
+                if not( (self.isCaching)and(dict_nqleNdCompiledCache.get(self, None)) ):
+                    dict_nqleNdCompiledCache[self] = compile(self.GetCollectedFullText(), "", 'exec')
+                dict_globals = self.DoExecute(dict_nqleNdCompiledCache[self], dict_vars={'ly': colLy.column()})
+                if self.txtVaribleForAlert in dict_globals:
+                    self.ProcAlertState(dict_globals[self.txtVaribleForAlert])
     def DoExecute(self, ess, *, dict_vars={}):
-        exec(ess, {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self}|dict_vars, None)
+        dict_globals = {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self}|dict_vars
+        exec(ess, dict_globals, None)
+        return dict_globals
     def ExecuteOne(self, inx):
         ci = self.lines[inx]
-        self.DoExecute(ci.txtExec if not ci.isTb else ci.tbPoi.as_string() if ci.tbPoi else "")
+        return self.DoExecute(ci.txtExec if not ci.isTb else ci.tbPoi.as_string() if ci.tbPoi else "")
     def ExecuteAll(self):
-        self.DoExecute(self.GetCollectedFullText())
+        return self.DoExecute(self.GetCollectedFullText())
     def GetCollectedFullText(self):
         txtAcc = ""
         sco = 0
@@ -990,10 +1155,10 @@ class NodeQuickLayoutExec(ManagerNodeRoot):
         self.count = length(self.lines)
 
 def NntUpdateTagId(self, context):
-    opa.BNode(context.space_data.edit_tree.nodes.active).typeinfo.contents.nclass = ConvNclassTagNameId.dict_сonvertIdToTag[self.idTag]
+    opa.BNode(self.id_data.nodes.active).typeinfo.contents.nclass = ConvNclassTagNameId.dict_сonvertIdToTag[self.idTag]
 def NntTimerSetTagId(self, nclass):
     self['idTag'] = ConvNclassTagNameId.dict_сonvertTagToId[nclass]
-    self.label = self.label #Теперь нужно явно затриггерить перерисовку; blid нода в макете обновляется, а слейдер -- нет.
+    self.label = self.label #Теперь нужно явно затриггерить перерисовку; blid нода в макете обновляется, а слайдер -- нет.
 class NodeNclassTagViewer(ManagerNodeRoot):
     nclass = 100 #100 #33
     bl_idname = 'MngNodeNclassToggler'
@@ -1004,7 +1169,7 @@ class NodeNclassTagViewer(ManagerNodeRoot):
     mngCategory = "4Hacking", 0
     idTag: bpy.props.IntProperty(name="Tag", default=0, min=0, max=17, update=NntUpdateTagId)
     def LyDrawNode(self, context, colLy, _prefs):
-        ndAc = context.space_data.edit_tree.nodes.active
+        ndAc = self.id_data.nodes.active
         uu_ly.LyBoxAsLabel(colLy, text=ndAc.bl_label if ndAc else "Active node is None", icon='NODE', active=not not ndAc, alignment='LEFT')
         if ndAc:
             tup_item = ConvNclassTagNameId.tup_сonvertTagName[self.idTag]
@@ -1013,23 +1178,13 @@ class NodeNclassTagViewer(ManagerNodeRoot):
                 bpy.app.timers.register(functools.partial(NntTimerSetTagId, self, nclass))
             colLy.prop(self,'idTag', text=f"{tup_item[0]}  —  {tup_item[1]}", slider=True) #-- – —
 
-def NsUpdateBg(self, context):
-    if (self.alertColor[3])and(alertState:=eval(self.txtEvalAlertState, {'self':self})):
-        #Заметка: При резком изменении alertColor[3]==1.0, здесь alertState==True, но цвет у нода почему то сразу не перерисовывается.
-        self.ProcAlertState(alertState)
-    elif self.pathHlFromTheme:
-        self.use_custom_color = (eval(self.txtEvalBgState, {'self':self}))and(self.isHlFromTheme)
-        list_atts = self.pathHlFromTheme.split(".")
-        self.color = getattr(getattr(context.preferences.themes[0].user_interface, list_atts[0]), list_atts[1])[:3]
-    else:
-        self.use_custom_color = False
-    self.lastAlertColor = self.alertColor
+def NsUpdateSolemn(self, _context):
     try:
         exec(self.txtExecOnUpdate, {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self, 'val':getattr(self, self.txtPropSelfSolemn)}, None)
-        dict_ndTxtError[self] = ""
+        dict_mngNdErrorEss[self] = ""
     except Exception as ex:
         LogConsole(f"Error in {self.__mng_repr__()}: {ex}") #См. тоже самое в NodeAssertor.
-        dict_ndTxtError[self] = str(ex)
+        dict_mngNdErrorEss[self] = str(ex)
 
 class ManagerNodeSolemn(ManagerNodeAlertness):
     nclass = 8
@@ -1040,32 +1195,32 @@ class ManagerNodeSolemn(ManagerNodeAlertness):
     mngCategory = "3Solemn", 0
     pathHlFromTheme = '' #Заметка топологии: См. в DoProcBg.
     txtEvalAlertState = compile("False", "", 'eval')
-    #Поскольку ProcAlertState только в NsUpdateBg, нужно чтобы цвет нода реагировал от измененения 'ManagerNodeAlertness.alertColor'
-    lastAlertColor: bpy.props.FloatVectorProperty(size=ManagerNodeAlertness.__annotations__['alertColor'].keywords['size'])
     txtCeremonial: bpy.props.StringProperty(name="Solemn Text", default="Ceremonial")
-    alerting: bpy.props.BoolProperty(name="Alert trigger", default=False, update=NsUpdateBg)
     txtExecOnUpdate: bpy.props.StringProperty(name="Exec On Update", default="", description="{'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self, 'val':getattr(self, self.txtPropSelfSolemn)}")
     value = property(lambda s: getattr(s, s.txtPropSelfSolemn), lambda s, v: setattr(s, s.txtPropSelfSolemn, v))
     def InitNodePreChain(self, _context):
         ManagerNodeAlertness.InitNodePreChain(self, _context)
         self.txtExecOnUpdate = "#log = print; log(val)" #"print (val)".replace(" ", "")
-    def DrawLabel(self):
-        if self.lastAlertColor[:]!=self.alertColor[:]:
-            bpy.app.timers.register(functools.partial(NsUpdateBg, self, bpy.context))
-        return ""
-    def LyDrawExtPreChain(self, _context, colLy, _prefs):
-        ManagerNodeAlertness.LyDrawExtPreChain(self, _context, colLy, _prefs)
+    def LyDrawExtNodePreChain(self, _context, colLy, _prefs):
+        ManagerNodeAlertness.LyDrawExtNodePreChain(self, _context, colLy, _prefs)
         uu_ly.LyNiceColorProp(colLy, self,'txtCeremonial', align=True)
         colLy.prop(self,'txtExecOnUpdate', text="", icon='SCRIPT')
-    def LyDrawPostChain(self, _context, colLy, _prefs):
-        ManagerNodeAlertness.LyDrawPostChain(self, _context, colLy, _prefs)
-        if txt:=dict_ndTxtError.get(self, ""):
+    def LyDrawNodePreChain(self, context, colLy, _prefs):
+        #Из-за Ctrl Z приходится проверять в рисовании, а не в событиях изменения их txtPropSelfSolemn.
+        if self.alertColor[3]:
+            self.ProcAlertState(eval(self.txtEvalAlertState, {'self':self}))
+        elif self.pathHlFromTheme:
+            list_atts = self.pathHlFromTheme.split(".")
+            fit = getattr(getattr(context.preferences.themes[0].user_interface, list_atts[0]), list_atts[1])
+            self.ProcAlertState(self.isHlFromTheme and eval(self.txtEvalBgState, {'self':self}), col=fit)
+    def LyDrawNodePostChain(self, _context, colLy, _prefs):
+        ManagerNodeAlertness.LyDrawNodePostChain(self, _context, colLy, _prefs)
+        if txt:=dict_mngNdErrorEss.get(self, ""):
             colLy.label(text=txt, icon='ERROR')
 
 def NsbUpdateDecor(self, context):
     if not(self.isHlFromTheme or self.decorVar):
         self['decorVar'] = 1
-    NsUpdateBg(self, context) #Заметка: бесполезные вызовы от decorVar.
 class NodeSolemnBool(ManagerNodeSolemn):
     bl_idname = 'MngNodeSolemnBool'
     bl_label = "Solemn Bool"
@@ -1073,8 +1228,8 @@ class NodeSolemnBool(ManagerNodeSolemn):
     txtEvalBgState = compile("self.bool", "", 'eval')
     txtEvalAlertState = compile("self.bool^self.alerting", "", 'eval')
     txtPropSelfSolemn = 'bool'
-    bool: bpy.props.BoolProperty(name="Bool", default=False, update=NsUpdateBg)
-    alerting: bpy.props.BoolProperty(name="Alert trigger", default=False, update=NsUpdateBg)
+    bool: bpy.props.BoolProperty(name="Bool", default=False, update=NsUpdateSolemn)
+    alerting: bpy.props.BoolProperty(name="Alert trigger", default=False)
     isHlFromTheme: bpy.props.BoolProperty(name="Highlighting from theme", default=True, update=NsbUpdateDecor)
     decorVar: bpy.props.IntProperty(name="Decor", default=1, min=0, max=3, update=NsbUpdateDecor)
     decorIcon0: bpy.props.StringProperty(name="Icon for False", default="CHECKBOX_HLT")
@@ -1090,7 +1245,7 @@ class NodeSolemnBool(ManagerNodeSolemn):
     def LyDrawNode(self, context, colLy, prefs):
         decorVar = self.decorVar
         txtCeremonial = self.txtCeremonial
-        colLy.prop(self,'bool', text=" " if (decorVar//2%2)and(not txtCeremonial)and(not decorVar//4) else txtCeremonial, icon=(self.decorIcon0 if self.bool else self.decorIcon1) if decorVar//2%2 else 'NONE', emboss=decorVar%2)
+        colLy.prop(self,'bool', text=" " if ((decorVar>>1)%2)and(not txtCeremonial)and(not (decorVar>>2)) else txtCeremonial, icon=(self.decorIcon0 if self.bool else self.decorIcon1) if (decorVar>>1)%2 else 'NONE', emboss=decorVar%2)
 
 class NodeSolemnFactor(ManagerNodeSolemn):
     bl_idname = 'MngNodeSolemnFactor'
@@ -1099,9 +1254,9 @@ class NodeSolemnFactor(ManagerNodeSolemn):
     txtEvalBgState = compile("not self.factor==0.0", "", 'eval')
     txtEvalAlertState = compile("not( (self.factor==0.0)and(self.alerting<1)or(self.factor==1.0)and(self.alerting>-1) )", "", 'eval')
     txtPropSelfSolemn = 'factor'
-    factor: bpy.props.FloatProperty(name="Factor", default=0.0, min=0, max=1, subtype='FACTOR', update=NsUpdateBg)
-    alerting: bpy.props.IntProperty(name="Alert trigger", default=0, min=-1, max=1, update=NsUpdateBg)
-    isHlFromTheme: bpy.props.BoolProperty(name="Highlighting from theme", default=True, update=NsUpdateBg)
+    factor: bpy.props.FloatProperty(name="Factor", default=0.0, min=0, max=1, subtype='FACTOR', update=NsUpdateSolemn)
+    alerting: bpy.props.IntProperty(name="Alert trigger", default=0, min=-1, max=1)
+    isHlFromTheme: bpy.props.BoolProperty(name="Highlighting from theme", default=True)
     def InitNode(self, context):
         self.factor = 0.5
     def LyDrawExtNode(self, context, colLy, prefs):
@@ -1115,7 +1270,7 @@ class NodeSolemnInteger(ManagerNodeSolemn):
     bl_label = "Solemn Integer"
     txtEvalAlertState = compile("self.integer", "", 'eval')
     txtPropSelfSolemn = 'integer'
-    integer: bpy.props.IntProperty(name="Integer", default=0, update=NsUpdateBg)
+    integer: bpy.props.IntProperty(name="Integer", default=0, update=NsUpdateSolemn)
     def LyDrawNode(self, context, colLy, prefs):
         colLy.prop(self, 'integer', text=self.txtCeremonial)
 
@@ -1124,16 +1279,16 @@ class NodeSolemnFloat(ManagerNodeSolemn):
     bl_label = "Solemn Float"
     txtEvalAlertState = compile("self.float", "", 'eval')
     txtPropSelfSolemn = 'float'
-    float: bpy.props.FloatProperty(name="Float", default=0.0, step=10, update=NsUpdateBg)
+    float: bpy.props.FloatProperty(name="Float", default=0.0, step=10, update=NsUpdateSolemn)
     def LyDrawNode(self, context, colLy, prefs):
         colLy.prop(self, 'float', text=self.txtCeremonial)
 
 class NodeSolemnColor(ManagerNodeSolemn):
     bl_idname = 'MngNodeSolemnColor'
     bl_label = "Solemn Color"
-    txtEvalAlertState = "any(self.colour)"
+    txtEvalAlertState = compile("any(self.colour)", "", 'eval')
     txtPropSelfSolemn = 'colour'
-    colour: bpy.props.FloatVectorProperty(name="Color", size=4, min=0.0, max=1.0, subtype='COLOR_GAMMA', update=NsUpdateBg) #Как ловко я выкрутился от конфликта api, но с сохранением эстетики.
+    colour: bpy.props.FloatVectorProperty(name="Color", size=4, min=0.0, max=1.0, subtype='COLOR_GAMMA', update=NsUpdateSolemn) #Как ловко я выкрутился от конфликта api, но с сохранением эстетики.
     decorVar: bpy.props.IntProperty(name="Decor", default=0, min=0, max=2)
     def InitNode(self, context):
         self.colour = bpy.context.preferences.themes[0].user_interface.wcol_numslider.item
@@ -1157,8 +1312,10 @@ class NodeSolemnLayout(ManagerNodeSolemn):
     bl_idname = 'MngNodeSolemnLayout'
     bl_label = "Solemn Layout"
     txtPropSelfSolemn = 'txtExec'
-    txtExec: bpy.props.StringProperty(name="Text Exec", description="{'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self, 'ly':colLy}", update=NsUpdateBg) #update для txtPropSelfSolemn.
+    fit = "{'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self, 'ly':colLy}"
+    txtExec: bpy.props.StringProperty(name="Text Exec", description=fit, update=NsUpdateSolemn) #update для txtPropSelfSolemn в 'val':getattr для exec.
     isShowOnlyLayout: bpy.props.BoolProperty(name="Layout display only", default=False)
+    del fit
     def InitNode(self, context):
         self.txtExec = "ly.row().prop(bpy.context.scene.render,'engine', expand=True)"
     def LyDrawExtNode(self, context, colLy, prefs):
@@ -1170,59 +1327,108 @@ class NodeSolemnLayout(ManagerNodeSolemn):
             exec(self.txtExec, {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self, 'ly':colLy}, None)
         except Exception as ex:
             LogConsole(f"Error in {self.__mng_repr__()}: {ex}")
-            colLy.label(text=str(ex), icon='ERROR') #todo0 А что если добавить "хиты"?, первые несколько секунд после возникновения ошибки показывать иконку красным цветом.
+            colLy.label(text=str(ex), icon='ERROR')
 
 dict_naNdCompileCache = {}
+dict_naNdLastRunTime = {} #И снова "нельзя писать в рисовании".
+dict_naNdAwLastAlertState = {}
+dict_naNdLastIsAlwaysWorks = {}
 
+def NaTimerNdWorkingAlways(tup_reprsNa): #reprGetTree, reprTreeGetNd
+    if (not eval(tup_reprsNa[0]))or(not(ndNa:=eval(tup_reprsNa[1])))or(not ndNa.isAlwaysWorks):
+        return None
+    tgl = ndNa.Assert()
+    if (ndNa not in dict_naNdAwLastAlertState)or(dict_naNdAwLastAlertState[ndNa]!=tgl):
+        dict_naNdAwLastAlertState[ndNa] = tgl
+        ndNa.label = ndNa.label
+    return ndNa.speedLimit
 def NaUpdateForReCompile(self, _context):
     dict_naNdCompileCache[self] = None
+    dict_naNdLastRunTime[self] = 0.0
 class NodeAssertor(ManagerNodeAlertness):
     nclass = 5 #42 #10 #40 #41
     bl_idname = 'MngNodeAssertor'
     bl_label = "Assert"
     bl_icon = 'STYLUS_PRESSURE' #STYLUS_PRESSURE  CAMERA_STEREO  MEMORY  HAND
-    bl_width_max = 700
+    bl_width_max = 1200
     bl_width_min = 140
     bl_width_default = 300
     mngCategory = "2Script", 1
     fit = "{'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self}"
-    txtEval: bpy.props.StringProperty(name="Text Eval", default="",            update=NaUpdateForReCompile, description=fit)
-    tbPoi:   bpy.props.PointerProperty(name="Text Block", type=bpy.types.Text, update=NaUpdateForReCompile, description=fit)
-    isTb:    bpy.props.BoolProperty(name="Use Text Block", default=False,      update=NaUpdateForReCompile)
+    method: bpy.props.EnumProperty(name="Method", default='EVAL', items=( ('EXEC',"Exec",""), ('EVAL',"Eval","") ), update=NaUpdateForReCompile)
+    txtAssert: bpy.props.StringProperty(name="Text Assert", default="",          update=NaUpdateForReCompile, description=fit)
+    tbPoi:     bpy.props.PointerProperty(name="Text Block", type=bpy.types.Text, update=NaUpdateForReCompile, description=fit)
+    isTb:      bpy.props.BoolProperty(name="Use Text Block", default=False,      update=NaUpdateForReCompile)
+    speedLimit: bpy.props.FloatProperty(name="Speed limit", default=1.0, min=0.0, max=60.0)
     isCaching:      bpy.props.BoolProperty(name="Caching",        default=True)
+    isAlwaysWorks:  bpy.props.BoolProperty(name="Always works",   default=False)
     isLyReadOnly:   bpy.props.BoolProperty(name="Read only",      default=False)
     isAlertOnError: bpy.props.BoolProperty(name="Alert on error", default=False)
     decorText: bpy.props.StringProperty(name="Decor Text", default="")
     decorIcon: bpy.props.StringProperty(name="Icon", default='NONE', update=MngUpdateDecorIcon)
     decorHeight: bpy.props.FloatProperty(name="Decor Height", default=0.0, min=0.0, max=4.0)
     del fit
-    def GetTextAssertEval(self):
+    def GetTextAssert(self):
         if self.isTb:
             if self.tbPoi:
                 return self.tbPoi.as_string()
+            else:
+                return ""
         else:
-            return self.txtEval
-        return ""
+            return self.txtAssert
     def InitNode(self, _context):
-        self.txtEval = "True"
+        self.method = 'EXEC'
+        self.txtAssert = "result = True"
         self.decorHeight = 0.17
         self.alertColor = (1.0, 1.0, 1.0, 1.0)
+    def Assert(self):
+        if not self.mute:
+            tpc = time.perf_counter()
+            if tpc-dict_naNdLastRunTime.get(self, 0.0)>self.speedLimit:
+                try:
+                    isAsExec = self.method=='EXEC'
+                    if not( (self.isCaching)and(dict_naNdCompileCache.get(self, None)) ):
+                        dict_naNdCompileCache[self] = compile(self.GetTextAssert(), "", 'exec') if isAsExec else compile(self.GetTextAssert(), "", 'eval')
+                    dict_globals = {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self}
+                    if isAsExec:
+                        exec(dict_naNdCompileCache[self], dict_globals)
+                        if 'result' in dict_globals:
+                            result = not dict_globals['result']
+                        else:
+                            self.ProcAlertState(self.isAlertOnError)
+                            dict_mngNdErrorEss[self] = ('INFO', "The execution should create the `result` variable.")
+                            result = self.isAlertOnError
+                            dict_naNdLastRunTime[self] = 0.0
+                            return result
+                    else:
+                        result = not eval(dict_naNdCompileCache[self], dict_globals)
+                    self.ProcAlertState(result)
+                    dict_mngNdErrorEss[self] = ()
+                    dict_naNdLastRunTime[self] = tpc #Не знаю, как по правильному, перед оценкой или после.
+                except Exception as ex:
+                    self.ProcAlertState(self.isAlertOnError)
+                    LogConsole(f"Error in {self.__mng_repr__()}: {ex}") #Когда сообщение об ошибке слишком длинное и не влезает в нод -- дополнительно отправить в консоль.
+                    dict_mngNdErrorEss[self] = ('ERROR', str(ex))
+                    result = self.isAlertOnError
+                    dict_naNdLastRunTime[self] = 0.0
+                return result
+        return None
     def DrawLabel(self):
-        try:
-            if not( (self.isCaching)and(dict_naNdCompileCache.get(self, None)) ):
-                txtAssert = self.GetTextAssertEval()
-                dict_naNdCompileCache[self] = compile(txtAssert if txtAssert else "", "", 'eval')
-            self.ProcAlertState(not eval(dict_naNdCompileCache[self], {'bpy':bpy, 'C':bpy.context, 'D':bpy.data, 'opa':opa, 'self':self}))
-            dict_ndTxtError[self] = ""
-        except Exception as ex:
-            self.ProcAlertState(self.isAlertOnError)
-            LogConsole(f"Error in {self.__mng_repr__()}: {ex}") #Когда сообщение об ошибке слишком длинное и не влезает в нод -- дополнительно отправить в консоль.
-            dict_ndTxtError[self] = str(ex)
-        return ( self.decorText if self.isLyReadOnly else ( (self.tbPoi.name if self.tbPoi else "" ) if self.isTb else self.txtEval ) ) if self.hide else ""
+        self.Assert()
+        if (self not in dict_naNdLastIsAlwaysWorks)or(self.isAlwaysWorks!=dict_naNdLastIsAlwaysWorks[self]):
+            dict_naNdLastIsAlwaysWorks[self] = self.isAlwaysWorks
+            if self.isAlwaysWorks:
+                list_spl = self.__mng_repr__().split("]")
+                fit = (list_spl[0].replace("[", ".get(")+", None)", list_spl[0]+"]"+list_spl[1].replace("[", ".get(")+", None)")
+                bpy.app.timers.register(functools.partial(NaTimerNdWorkingAlways, fit))
+        return ( self.decorText if self.isLyReadOnly else ( (self.tbPoi.name if self.tbPoi else "" ) if self.isTb else self.txtAssert ) ) if self.hide else ""
     def LyDrawExtNode(self, _context, colLy, _prefs):
         colList = colLy.column(align=True)
+        colList.row().prop(self,'method', expand=True) #colList.prop(self,'method')
         colList.prop(self,'isTb')
+        colList.prop(self,'speedLimit')
         colList.prop(self,'isCaching')
+        colList.prop(self,'isAlwaysWorks')
         colList.prop(self,'isLyReadOnly')
         colList.prop(self,'isAlertOnError')
         row = colList.row()
@@ -1253,12 +1459,12 @@ class NodeAssertor(ManagerNodeAlertness):
                 box.scale_y = 0.5
                 rowLabel = box.row()
                 rowLabel.alignment = 'CENTER'
-                rowLabel.label(text=self.decorText if self.decorText else ((self.tbPoi.name if self.tbPoi else "" ) if self.isTb else self.txtEval ), icon=self.decorIcon)
+                rowLabel.label(text=self.decorText if self.decorText else ((self.tbPoi.name if self.tbPoi else "" ) if self.isTb else self.txtAssert ), icon=self.decorIcon)
             else:
                 if self.isTb:
                     rowMain.prop(self,'tbPoi', text="", icon=self.decorIcon if self.decorIcon!='NONE' else 'TEXT')
                 else:
-                    rowMain.prop(self,'txtEval', text="", icon=self.decorIcon if self.decorIcon!='NONE' else 'SCRIPT')
+                    rowMain.prop(self,'txtAssert', text="", icon=self.decorIcon if self.decorIcon!='NONE' else 'SCRIPT')
         #Обратно:
         if fac:
             row = rowMain.row(align=True)
@@ -1270,16 +1476,26 @@ class NodeAssertor(ManagerNodeAlertness):
             row.label()
             row.scale_y = self.decorHeight
         #Показ ошибки
-        if txt:=dict_ndTxtError.get(self, ""):
-            colLy.label(text=txt, icon='ERROR')
+        if tup_err:=dict_mngNdErrorEss.get(self, None):
+            colLy.label(text=tup_err[1], icon=tup_err[0])
 
 def Prefs():
     return bpy.context.preferences.addons[bl_info['name']].preferences
 
+def MngUpdateRegisterTreeType(self, _context):
+    if self.isRegisterTreeType:
+        bpy.utils.register_class(ManagerTree)
+    else:
+        try: #Что-то я не знаю, как проверить зарегестрированность дерева.
+            bpy.utils.unregister_class(ManagerTree)
+        except:
+            pass
 class AddonPrefs(AddonPrefs):
+    isRegisterTreeType: bpy.props.BoolProperty(name="Register Tree Type", default=True, update=MngUpdateRegisterTreeType)
     isAllowNqleWorking: bpy.props.BoolProperty(name="Quick Layout Node is working", default=True)
     def draw(self, context):
         colLy = self.layout.column()
+        colLy.prop(self,'isRegisterTreeType')
         colLy.prop(self,'isAllowNqleWorking')
 
 def RecrGetSubclasses(cls):
@@ -1295,9 +1511,9 @@ for li in RecrGetSubclasses(ManagerNodeRoot):
         set_mngNodeClasses.add(li)
         assert hasattr(li, 'mngCategory')
         dict_catAdds.setdefault(li.mngCategory[0], []).append(li)
-list_catAdds = [(li[0][1:], li[1]) for li in sorted(dict_catAdds.items(), key=lambda a: a[0][0])]
+list_catAdds = [(li[0][1:], li[1]) for li in sorted(dict_catAdds.items(), key=lambda a: a[0][0])] #Отсортировать порядок категорий и избавиться от их начальных цифр.
 del dict_catAdds
-for li in list_catAdds:
+for li in list_catAdds: #Отсортировать ноды в категориях.
     li[1].sort(key=lambda a: a.mngCategory[1])
 #set_mngNodeBlids = set(si.bl_idname for si in set_mngNodeClasses)
 
@@ -1314,11 +1530,16 @@ def register():
                 setattr(prefs, li, pr.default)
             else:
                 getattr(prefs, li).clear()
+    global ManagerTree
+    BakManagerTree = ManagerTree
+    del ManagerTree
     uu_regutils.LazyRegAll(rud, globals())
+    ManagerTree = BakManagerTree
     prefs = Prefs()
     ResetPrefsToDefault(prefs)
     PanelAddManagerNode.CreateUnfs(prefs)
     PanelAddManagerNode_SubPresetsAndEx.CreateUnfs(prefs)
+    prefs.isRegisterTreeType = prefs.isRegisterTreeType
 def unregister():
     uu_regutils.UnregFromLazyRegAll(rud)
 
