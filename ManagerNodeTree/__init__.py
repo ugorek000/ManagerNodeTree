@@ -149,7 +149,7 @@ class ManagerNodeRoot(bpy.types.Node, ManagerNodeFiller):
     def poll(cls, tree):
         return True
     def init(self, context):
-        if (self.possibleDangerousGradation)and(not Prefs().isDisclaimerAcceptance):
+        if (self.possibleDangerousGradation)and(not Prefs().isDisclaimerAcceptance): #За компанию.
             return ""
         if context is None:
             context = bpy.context

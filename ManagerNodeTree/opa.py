@@ -73,7 +73,7 @@ class BNodeSocket(Structs):
     _pad:                   char*4
     label:                  char*64
     description:            char*64
-    if (bpy.app.version>=(4,0,0))and(bpy.app.version_string!='4.0.0 Alpha'):
+    if (bpy.app.version>=(4,0,0))and(bpy.app.version_string!="4.0.0 Alpha"):
         short_label:            char*64
     default_attribute_name: ctypes.POINTER(char)
     to_index:               int
@@ -120,6 +120,8 @@ class BNode(Structs):
     storage:    void_p
     prop:       void_p
     parent:     void_p
+    if bpy.app.version_string=="4.3.0 Alpha":
+        pad:        void_p  #Выяснено опытным путём; в файле его не нашёл. Понятия не имею, что это может быть.
     locx:       float
     locy:       float
     width:      float
