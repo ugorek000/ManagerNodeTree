@@ -11,3 +11,5 @@
 ![2024-09-05_13 51 33](https://github.com/user-attachments/assets/444fd821-44d8-4e24-a8b5-bf3166576635)
 
 ![2024-09-05_14 11 51](https://github.com/user-attachments/assets/ea0ae500-6060-4438-b131-4f7adfd7a876)
+
+![2024-09-05_14 31 51](https://github.com/user-attachments/assets/4790ccd9-d8d6-43bb-a40e-e1a5c2b2648f)
