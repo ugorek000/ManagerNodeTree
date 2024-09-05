@@ -65,16 +65,16 @@ def ProcConfirmAlert(essKey, limit=None):
 
 #Заметка: Если в названии есть Add -- функция возвращает макет.
 
-def LyBoxAsLabel(where, *, text, icon, active=True, alignment='CENTER'):
+def LyBoxAsLabel(where, *, text, icon='NONE', alignment='CENTER', active=True):
     box = where.box()
     row = box.row(align=True)
     row.alignment = alignment
     row.label(text=text, icon=icon)
     row.active = active
     box.scale_y = 0.5
-def LyAddHeaderedBox(where, *, text, icon, active=True):
+def LyAddHeaderedBox(where, *, text, icon='NONE', alignment='CENTER', active=True):
     col = where.column(align=True)
-    if txt:
+    if text:
         LyBoxAsLabel(col, text=text, icon=icon, active=active, alignment=alignment)
     return col.box()
 
@@ -119,7 +119,7 @@ class TryAndErrInLy():
         if type: #any((type, value, tb))
             LyTxtErr(self.ly, traceback.format_exc())
 
-def LyNiceColorProp(where, ess, prop, *, align=False, text="", scale=0.0, decor=3):
+def LyNiceColorProp(where, ess, prop, *, align=False, text="", icon='NONE', scale=0.0, decor=3):
     rowCol = where.row(align=align)
     rowLabel = rowCol.row()
     rowLabel.alignment = 'LEFT'
@@ -128,7 +128,7 @@ def LyNiceColorProp(where, ess, prop, *, align=False, text="", scale=0.0, decor=
     rowProp = rowCol.row()
     rowProp.alignment = 'LEFT' if scale else 'EXPAND'
     rowProp.scale_x = scale
-    rowProp.prop(ess, prop, text="")
+    rowProp.prop(ess, prop, text="", icon=icon)
     rowProp.active = decor//2%2
 
 def LyHighlightingText(where, *args_txt):
