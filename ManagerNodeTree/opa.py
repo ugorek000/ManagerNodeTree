@@ -1,10 +1,9 @@
-#24.03.15 by ugorek
+#24.09.10 by ugorek
 
 import bpy, ctypes, platform
 
 class Structs(ctypes.Structure):
     list_subclasses = []
-    __annotations__ = {}
     def __init_subclass__(cls):
         cls.list_subclasses.append(cls)
     @staticmethod
@@ -20,17 +19,21 @@ class Structs(ctypes.Structure):
                 cls._fields_ = list_fields
             cls.__annotations__.clear()
         Structs.list_subclasses.clear()
+    ##
+    def __getattribute__(self, att):
+        result = object.__getattribute__(self, att)
+        return result.contents if result.__class__.__name__.startswith("LP_") else result
     @classmethod
     def GetFields(cls, ess):
         return cls.from_address(ess.as_pointer())
 
 from ctypes import (c_void_p as void_p,
                     c_uint32 as uint32,
-                    c_short as short,
-                    c_int16 as int16,
-                    c_int as int,
-                    c_float as float,
-                    c_char as char)
+                    c_short  as short,
+                    c_int16  as int16,
+                    c_int    as int,
+                    c_float  as float,
+                    c_char   as char)
 
 #\source\blender\blenkernel\BKE_node_runtime.hh
 class BNodeSocketRuntime(Structs):
@@ -162,8 +165,13 @@ class View2D(Structs):
     ...
 
 Structs.InitStructs()
-del Structs
 
 for dk, dv in dict(globals()).items():
     if getattr(dv,'__module__', "")==__name__:
-        globals()[dk] = dv.GetFields
+        if dk!="Structs":
+            globals()[dk] = dv.GetFields
+
+for li in dir(Structs):
+    if not li.startswith("_"):
+        delattr(Structs, li)
+del Structs

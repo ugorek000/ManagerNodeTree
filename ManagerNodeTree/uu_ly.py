@@ -63,7 +63,7 @@ def ProcConfirmAlert(essKey, limit=None):
             uca.Done()
             return None
 
-#Заметка: Если в названии есть Add -- функция возвращает макет.
+#Заметка: Если в названии есть 'Add' -- функция возвращает макет.
 
 def LyBoxAsLabel(where, *, text, icon='NONE', alignment='CENTER', active=True):
     box = where.box()
@@ -79,7 +79,7 @@ def LyAddHeaderedBox(where, *, text, icon='NONE', alignment='CENTER', active=Tru
     return col.box()
 
 import rna_keymap_ui
-def LySimpleKeyMapList(context, where, kmU, set_opBlids):                 #todo элементы прилипают к заголовку, добавить промежуток
+def LySimpleKeyMapList(context, where, kmU, set_opBlids): #todo элементы прилипают к заголовку, добавить промежуток
     #import rna_keymap_ui
     colMain = where.column(align=True)
     #colMain.separator()
@@ -119,7 +119,7 @@ class TryAndErrInLy():
         if type: #any((type, value, tb))
             LyTxtErr(self.ly, traceback.format_exc())
 
-def LyNiceColorProp(where, ess, prop, *, align=False, text="", icon='NONE', scale=0.0, decor=3):
+def LyNiceColorProp(where, ess, prop, *, align=False, text="", icon='NONE', placeholder="", scale=0.0, decor=3):
     rowCol = where.row(align=align)
     rowLabel = rowCol.row()
     rowLabel.alignment = 'LEFT'
@@ -128,7 +128,7 @@ def LyNiceColorProp(where, ess, prop, *, align=False, text="", icon='NONE', scal
     rowProp = rowCol.row()
     rowProp.alignment = 'LEFT' if scale else 'EXPAND'
     rowProp.scale_x = scale
-    rowProp.prop(ess, prop, text="", icon=icon)
+    rowProp.prop(ess, prop, text="", icon=icon, placeholder=placeholder)
     rowProp.active = decor//2%2
 
 def LyHighlightingText(where, *args_txt):
